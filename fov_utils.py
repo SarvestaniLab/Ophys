@@ -10,11 +10,66 @@ from typing import List, Optional, Callable
 from datetime import datetime, timedelta
 import json
 
-# Import FOV class (assumes fov_config_suite2p is in same directory)
+# Import FOV class and functions (assumes fov_config_suite2p is in same directory)
 try:
-    from fov_config_suite2p import FOV
+    from fov_config_suite2p import FOV, populate_fov_from_stimulus
 except ImportError:
     print("Warning: Could not import FOV class. Make sure fov_config_suite2p.py is in the same directory.")
+
+
+def create_fov_from_stimfile(stimfile: str,
+                              TifStack_path: str,
+                              ImagingFile: List[int],
+                              Spk2File: List[int],
+                              **kwargs) -> FOV:
+    """
+    Create and populate a FOV from stimulus file in one step.
+
+    This is a convenience function that creates a FOV object and
+    automatically populates it from the stimulus file and path.
+
+    Args:
+        stimfile: Path to stimulus file (can be relative to TifStack_path)
+        TifStack_path: Path to imaging data directory
+        ImagingFile: List of imaging file indices
+        Spk2File: List of Spike2 file indices
+        **kwargs: Additional FOV parameters (factor, brain_region, layer, etc.)
+
+    Returns:
+        FOV object with auto-populated fields
+
+    Example:
+        >>> fov = create_fov_from_stimfile(
+        ...     stimfile='visual_stim.py',
+        ...     TifStack_path='X:/Data/20251113_Derrick',
+        ...     ImagingFile=[0],
+        ...     Spk2File=[0],
+        ...     factor=1,
+        ...     brain_region='V1',
+        ...     layer='L2/3'
+        ... )
+    """
+    # Create FOV with required and optional parameters
+    fov = FOV(
+        TifStack_path=TifStack_path,
+        ImagingFile=ImagingFile,
+        Spk2File=Spk2File,
+        **kwargs
+    )
+
+    # Determine stimulus filename
+    stim_path = Path(stimfile)
+    if stim_path.is_absolute():
+        # Use just the filename if absolute path provided
+        stim_filename = stim_path.name
+    else:
+        # Use as-is if relative or just filename
+        stim_filename = str(stim_path)
+
+    # Populate from stimulus file
+    fov = populate_fov_from_stimulus(fov, stim_filename=stim_filename)
+
+    return fov
 
 
 def filter_fovs(fovs: List[FOV],
