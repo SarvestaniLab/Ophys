@@ -23,22 +23,23 @@ def find_stim_file_in_spk2_dirs(data_dir: Path, spk2_indices: List[int]) -> Opti
 
     The typical structure is:
     data_dir/
-        t00016/  (Spk2File[0])
+        t00016/  (Spk2File[0] might be file #16)
             driftinggrating_orientation.py
             spike2data files...
-        t00017/  (Spk2File[1])
+        t00017/  (Spk2File[1] might be file #17)
             ...
 
     Args:
         data_dir: Path to main data directory
-        spk2_indices: List of Spk2 file indices to search
+        spk2_indices: List of Spk2 file indices (e.g., [0] or [16])
+                     If indices are small (< 100), will also search all t* directories
 
     Returns:
         Path to stimulus file or None if not found
     """
     data_path = Path(data_dir)
 
-    # Search in each Spk2 directory
+    # Search in each specified Spk2 directory
     for spk2_idx in spk2_indices:
         # Try common naming patterns for Spk2 directories
         possible_dirs = [
@@ -56,6 +57,21 @@ def find_stim_file_in_spk2_dirs(data_dir: Path, spk2_indices: List[int]) -> Opti
                     # Prefer files with common stimulus keywords
                     for pattern in ['*grating*.py', '*orientation*.py', '*stim*.py', '*visual*.py']:
                         matches = list(spk2_dir.glob(pattern))
+                        if matches:
+                            return matches[0]
+                    # Otherwise return first .py file
+                    return py_files[0]
+
+    # If indices are small (likely list indices, not file numbers), search all t* directories
+    if max(spk2_indices) < 100:
+        # Find all directories matching t[0-9]+ pattern
+        for item in data_path.iterdir():
+            if item.is_dir() and item.name.startswith('t') and item.name[1:].isdigit():
+                py_files = list(item.glob('*.py'))
+                if py_files:
+                    # Prefer files with common stimulus keywords
+                    for pattern in ['*grating*.py', '*orientation*.py', '*stim*.py', '*visual*.py']:
+                        matches = list(item.glob(pattern))
                         if matches:
                             return matches[0]
                     # Otherwise return first .py file
@@ -132,14 +148,22 @@ def create_fov_from_stimfile(stimfile: Optional[str],
     if stimfile is None:
         # Auto-detect in Spk2 subdirectories
         stim_path = find_stim_file_in_spk2_dirs(Path(TifStack_path), Spk2File)
-        if stim_path:
-            # Get relative path from TifStack_path
-            try:
-                stim_filename = str(stim_path.relative_to(Path(TifStack_path)))
-            except ValueError:
-                # If not relative, use absolute path
-                stim_filename = str(stim_path)
-            print(f"  Auto-detected stimulus file: {stim_filename}")
+        if stim_path is None:
+            raise FileNotFoundError(
+                f"Could not find stimulus file (.py) in Spk2 subdirectories.\n"
+                f"  Searched in: {TifStack_path}\n"
+                f"  Looking for subdirectories: t{Spk2File[0]:05d}, t{Spk2File[0]:04d}, etc.\n"
+                f"  Please either:\n"
+                f"    1. Specify stimfile parameter explicitly, or\n"
+                f"    2. Ensure .py file exists in the Spk2 subdirectory"
+            )
+        # Get relative path from TifStack_path
+        try:
+            stim_filename = str(stim_path.relative_to(Path(TifStack_path)))
+        except ValueError:
+            # If not relative, use absolute path
+            stim_filename = str(stim_path)
+        print(f"  Auto-detected stimulus file: {stim_filename}")
     else:
         stim_path = Path(stimfile)
         if stim_path.is_absolute():
