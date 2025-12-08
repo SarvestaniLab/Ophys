@@ -10,7 +10,7 @@ Usage:
     3. Auto-populated fields will be extracted from stimulus files
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import List, Optional, Union
 import re
@@ -294,6 +294,41 @@ def populate_fov_from_stimulus(fov: FOV, stim_filename: Optional[str] = None) ->
         print(f"  ✗ Error parsing stimulus file: {e}")
 
     return fov
+
+
+def export_fov_to_dict(fov: FOV) -> dict:
+    """
+    Export FOV object to dictionary for saving to HDF5.
+
+    Args:
+        fov: FOV object
+
+    Returns:
+        Dictionary with FOV parameters as JSON-serializable types
+    """
+    fov_dict = {}
+
+    # Get all fields from the dataclass
+    for field_info in fields(fov):
+        field_name = field_info.name
+        value = getattr(fov, field_name)
+
+        # Convert to JSON-serializable types
+        if value is None:
+            continue
+        elif isinstance(value, (str, int, float, bool)):
+            fov_dict[field_name] = value
+        elif isinstance(value, list):
+            # Convert lists to comma-separated string
+            fov_dict[field_name] = str(value)
+        elif isinstance(value, datetime):
+            # Convert datetime to ISO string
+            fov_dict[field_name] = value.isoformat()
+        else:
+            # Convert anything else to string
+            fov_dict[field_name] = str(value)
+
+    return fov_dict
 
 
 def print_fov_summary(fov: FOV, index: int):
