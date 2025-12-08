@@ -421,9 +421,10 @@ def extract_suite2p_traces(fov, fnum: int = 0, save_dir: Optional[Path] = None) 
         # Extract mask
         try:
             mask = np.zeros((512, 512))
-            ypix = stat['ypix'][0].astype(int)
-            xpix = stat['xpix'][0].astype(int)
-            lam = stat['lam'][0]
+            # Properly flatten nested MATLAB arrays
+            ypix = np.asarray(stat['ypix'][0]).flatten().astype(int)
+            xpix = np.asarray(stat['xpix'][0]).flatten().astype(int)
+            lam = np.asarray(stat['lam'][0]).flatten()
 
             # Ensure indices are within bounds
             valid_idx = (xpix < 512) & (ypix < 512) & (xpix >= 0) & (ypix >= 0)
