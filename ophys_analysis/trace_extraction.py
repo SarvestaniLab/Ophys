@@ -49,14 +49,54 @@ def format_spike2_dir(file_num: int) -> str:
         file_num: File number
 
     Returns:
-        Formatted directory name (e.g., 't0000016' for file_num=16)
+        Formatted directory name (e.g., 't00016' for file_num=16)
     """
-    if file_num > 99:
-        return f't00{file_num}'
-    elif file_num > 9:
-        return f't000{file_num}'
-    else:
-        return f't0000{file_num}'
+    return f't{file_num:05d}'
+
+
+def find_spike2_dir(base_path: Path, file_num: int) -> Path:
+    """
+    Find Spike2 directory, searching if the exact number doesn't exist.
+
+    This handles cases where Spk2File is a list index (e.g., [0])
+    rather than the actual file number (e.g., [16]).
+
+    Args:
+        base_path: Base directory to search in
+        file_num: File number from Spk2File parameter
+
+    Returns:
+        Path to Spike2 directory
+
+    Raises:
+        FileNotFoundError: If no valid Spike2 directory found
+    """
+    # Try the exact file number first
+    exact_dir = base_path / format_spike2_dir(file_num)
+    if exact_dir.exists():
+        return exact_dir
+
+    # If file_num is small (< 100), it's likely a list index, not file number
+    # Search for any directory matching t[0-9]{5} pattern
+    if file_num < 100:
+        for item in base_path.iterdir():
+            if item.is_dir() and item.name.startswith('t') and len(item.name) == 6:
+                # Check if it looks like t00016 pattern
+                if item.name[1:].isdigit():
+                    # Verify it has the expected Spike2 files
+                    if (item / 'twophotontimes.txt').exists() or (item / 'stimontimes.txt').exists():
+                        print(f"  Found Spike2 directory: {item.name} (Spk2File=[{file_num}])")
+                        return item
+
+    # If not found, raise clear error
+    raise FileNotFoundError(
+        f"Could not find Spike2 directory.\n"
+        f"  Looked for: {exact_dir}\n"
+        f"  Searched in: {base_path}\n"
+        f"  Spk2File parameter: [{file_num}]\n"
+        f"  If Spk2File is a list index (not file number), directory name may differ.\n"
+        f"  Please check your data directory structure."
+    )
 
 
 def load_spike2_data(spk2_dir: Path, factor: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -344,7 +384,7 @@ def extract_suite2p_traces(fov, fnum: int = 0, save_dir: Optional[Path] = None) 
     print(f"  Imaging file: {file2p}, Spike2 file: {fileSpk}")
 
     # Set up directory paths
-    spk2_dir = TwoPhoton_path / format_spike2_dir(fileSpk)
+    spk2_dir = find_spike2_dir(TwoPhoton_path, fileSpk)
     folder_dir = TwoPhoton_path
     name = str(file2p)
 
