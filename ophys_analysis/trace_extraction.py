@@ -85,13 +85,14 @@ def find_spike2_dir(base_path: Path, file_num: int) -> Path:
     return spk2_dir
 
 
-def load_spike2_data(spk2_dir: Path, factor: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def load_spike2_data(spk2_dir: Path, factor: int, n_frames: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Load timing and stimulus information from Spike2 files.
 
     Args:
         spk2_dir: Path to Spike2 directory
         factor: Frame averaging factor
+        n_frames: Number of frames in Suite2P output (for validation/alignment)
 
     Returns:
         Tuple of (twophotontimes, stimOn, stimID)
@@ -99,24 +100,49 @@ def load_spike2_data(spk2_dir: Path, factor: int) -> Tuple[np.ndarray, np.ndarra
     # Load 2P frame times
     twophotontimes_path = spk2_dir / 'twophotontimes.txt'
     twophotontimes = np.loadtxt(twophotontimes_path)
-    # Downsample by factor
-    twophotontimes = twophotontimes[::factor]
+
+    # Only downsample if we need to match Suite2P frame count
+    # Suite2P outputs at the same rate as its input (after any frame averaging in ThorImage)
+    # If n_frames is provided, use it to determine the correct downsampling
+    if n_frames is not None:
+        # Calculate what factor would give us the right number of frames
+        actual_factor = len(twophotontimes) // n_frames
+        if actual_factor > 1 and abs(len(twophotontimes) // actual_factor - n_frames) <= 2:
+            # Use the calculated factor that matches Suite2P output
+            twophotontimes = twophotontimes[::actual_factor]
+            if actual_factor != factor:
+                print(f"  Note: Adjusted frame alignment factor from {factor} to {actual_factor} "
+                      f"to match Suite2P frames ({n_frames})")
+        elif factor > 1:
+            # Fall back to specified factor if it gives reasonable match
+            downsampled_len = len(twophotontimes) // factor
+            if abs(downsampled_len - n_frames) <= n_frames * 0.1:  # Within 10%
+                twophotontimes = twophotontimes[::factor]
+            else:
+                # Lengths don't match - don't downsample
+                print(f"  Warning: Frame count mismatch - twophotontimes has {len(twophotontimes)} entries, "
+                      f"Suite2P has {n_frames} frames. Not downsampling twophotontimes.")
+    elif factor > 1:
+        # No n_frames provided, use specified factor (legacy behavior)
+        twophotontimes = twophotontimes[::factor]
 
     # Load stimulus timing
     stim_path = spk2_dir / 'stimontimes.txt'
     S = np.loadtxt(stim_path)
 
     # Parse stimulus data: alternating stimID and stimOn times
-    stimOn = S[1::2]  # Even indices (0-indexed, so 1, 3, 5...)
-    stimID = S[0::2]  # Odd indices (0, 2, 4...)
+    # File format: [stimID_0, stimOn_0, stimID_1, stimOn_1, ...]
+    stimID = S[0::2]  # Indices 0, 2, 4, ... (stimulus IDs)
+    stimOn = S[1::2]  # Indices 1, 3, 5, ... (stimulus onset times)
 
-    # Remove first stimID if it's 0 (initialization error)
+    # Remove first stimID if it's 0 (initialization artifact)
     if len(stimID) > 0 and stimID[0] == 0:
         stimOn = np.delete(stimOn, 0)
         stimID = np.delete(stimID, 0)
 
-    # If stimID contains 0s (mistake), shift all IDs up by 1
-    if np.sum(stimID == 0) > 1:
+    # Ensure stimIDs are 1-indexed for proper trial organization
+    # If min stimID is 0, shift all IDs up by 1
+    if len(stimID) > 0 and np.min(stimID) == 0:
         stimID = stimID + 1
 
     return twophotontimes, stimOn, stimID
@@ -254,7 +280,7 @@ def organize_into_trials(cell: Cell,
 
     numStims = ntrials * n_stims
 
-    for ii in range(numStims - 1):
+    for ii in range(numStims):  # Process ALL stimulus presentations, not numStims-1
         # Define time windows
         prestimTime = np.arange(stimOn2pFrame[ii] - prePeriod2, stimOn2pFrame[ii] + 1)
         stimTime = np.arange(stimOn2pFrame[ii] + 1,
@@ -375,13 +401,27 @@ def extract_suite2p_traces(fov, fnum: int = 0, save_dir: Optional[Path] = None) 
     folder_dir = TwoPhoton_path
     name = str(file2p)
 
-    # Load Spike2 timing data
+    # Load Suite2P data FIRST to get frame count for alignment
+    suite2p_path = TwoPhoton_path / f't{file2p}' / 'suite2p' / 'plane0' / 'Fall.mat'
+    suite2p_data = load_suite2p_data(suite2p_path)
+    n_frames = suite2p_data['F'].shape[1]  # Number of frames in Suite2P output
+    print(f"  Suite2P frame count: {n_frames}")
+
+    # Load Spike2 timing data (with frame count for proper alignment)
     print("\n  Loading Spike2 timing data...")
-    twophotontimes, stimOn, stimID = load_spike2_data(spk2_dir, factor)
+    twophotontimes, stimOn, stimID = load_spike2_data(spk2_dir, factor, n_frames=n_frames)
 
     uniqStims = np.unique(stimID)
     print(f"  Loaded {len(uniqStims)} unique stimulus codes")
     print(f"  Loaded {len(stimOn)} stimulus presentations")
+    print(f"  Aligned twophotontimes: {len(twophotontimes)} entries")
+
+    # Validate frame alignment
+    if abs(len(twophotontimes) - n_frames) > 2:
+        warnings.warn(
+            f"Frame count mismatch after alignment: twophotontimes has {len(twophotontimes)} entries "
+            f"but Suite2P has {n_frames} frames. Trial cutting may be inaccurate."
+        )
 
     # Load registration offsets
     reg_path = TwoPhoton_path / f't{file2p}' / 'Registered_TempMod' / 'regOffsets.mat'
@@ -396,10 +436,6 @@ def extract_suite2p_traces(fov, fnum: int = 0, save_dir: Optional[Path] = None) 
     ce.copyStimOn = stimOn.copy()
     ce.uniqStims = uniqStims
     ce.regOffsets = regOffsets
-
-    # Load Suite2P data
-    suite2p_path = TwoPhoton_path / f't{file2p}' / 'suite2p' / 'plane0' / 'Fall.mat'
-    suite2p_data = load_suite2p_data(suite2p_path)
 
     # Get cell indices (iscell[:, 0] == 1)
     cell_inds = np.where(suite2p_data['iscell'][:, 0] == 1)[0]
