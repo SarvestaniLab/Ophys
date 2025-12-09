@@ -89,7 +89,8 @@ def plot_cell_tuning_curve(cell: Cell,
         response_sorted = response_sorted - np.min(response_sorted)
 
     n_points = cell.cyc.shape[2]
-    time_trace = np.linspace(0, n_points * cell.scanPeriod, n_points)
+    # Use arange for correct time spacing (linspace would give n_points/(n_points-1) * scanPeriod spacing)
+    time_trace = np.arange(n_points) * cell.scanPeriod
 
     # Plot time series for each orientation
     for i, sort_i in enumerate(sort_idx):
