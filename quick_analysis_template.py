@@ -81,25 +81,25 @@ def main():
     print()
     ce.print_summary()
 
-    # Step 3: Save to HDF5
+    # Create output subdirectory named after ImagingFile (e.g., t0, t1, etc.)
+    imaging_file_num = fov.ImagingFile[0] if isinstance(fov.ImagingFile, list) else fov.ImagingFile
+    report_path = output_path / f"t{imaging_file_num}"
+    report_path.mkdir(parents=True, exist_ok=True)
+
+    # Step 3: Save to HDF5 in the same subdirectory
     print("\n[3/4] Saving extraction results...")
-    h5_file = output_path / 'extraction_results.h5'
+    h5_file = report_path / 'extraction_results.h5'
     save_extraction_hdf5(ce, str(h5_file))
 
     # Step 4: Generate full analysis report
     print("\n[4/4] Generating analysis report...")
-    # Save in subfolder named after ImagingFile (e.g., t0, t1, etc.)
-    imaging_file_num = fov.ImagingFile[0] if isinstance(fov.ImagingFile, list) else fov.ImagingFile
-    report_path = output_path / f"t{imaging_file_num}"
-    report_path.mkdir(parents=True, exist_ok=True)
     create_full_analysis_report(ce, output_dir=str(report_path), fit_r_threshold=FIT_R_THRESHOLD)
 
     print(f"\n{'='*70}")
     print("ANALYSIS COMPLETE!")
     print(f"{'='*70}")
-    print(f"Extraction saved to: {output_path}")
+    print(f"All outputs saved to: {report_path}")
     print(f"  - extraction_results.h5")
-    print(f"Analysis report saved to: {report_path}")
     print(f"  - population_summary.png")
     print(f"  - orientation_maps.png")
     print(f"  - tuning_distributions.png")

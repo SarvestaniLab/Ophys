@@ -99,26 +99,26 @@ def analyze_fov(data_dir: Path,
         print(f"  Error during extraction: {e}")
         sys.exit(1)
 
-    # Step 4: Save HDF5
+    # Create output subdirectory named after ImagingFile (e.g., t0, t1, etc.)
+    imaging_file_num = fov.ImagingFile[0] if isinstance(fov.ImagingFile, list) else fov.ImagingFile
+    report_dir = output_dir / f"t{imaging_file_num}"
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    # Step 4: Save HDF5 to the same subdirectory
     if save_h5:
         print("\nStep 4: Saving extraction results...")
-        h5_file = output_dir / 'extraction_results.h5'
+        h5_file = report_dir / 'extraction_results.h5'
         save_extraction_hdf5(ce, str(h5_file))
 
     # Step 5: Generate full analysis report
     print("\nStep 5: Generating analysis report...")
     try:
-        # Save in subfolder named after ImagingFile (e.g., t0, t1, etc.)
-        imaging_file_num = fov.ImagingFile[0] if isinstance(fov.ImagingFile, list) else fov.ImagingFile
-        report_dir = output_dir / f"t{imaging_file_num}"
-        report_dir.mkdir(parents=True, exist_ok=True)
         create_full_analysis_report(ce, output_dir=str(report_dir), fit_r_threshold=fit_r_threshold)
         print(f"\n{'='*70}")
         print("ANALYSIS COMPLETE!")
         print(f"{'='*70}")
-        print(f"Extraction saved to: {output_dir}")
+        print(f"All outputs saved to: {report_dir}")
         print(f"  - extraction_results.h5")
-        print(f"Analysis report saved to: {report_dir}")
         print(f"  - population_summary.png")
         print(f"  - orientation_maps.png")
         print(f"  - tuning_distributions.png")
