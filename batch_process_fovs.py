@@ -124,9 +124,14 @@ def process_single_fov(data_dir: Path,
         print("  Extracting Suite2P traces...")
         ce = extract_suite2p_traces(fov, fnum=0)
 
-        # Save extraction results
+        # Create output subdirectory named after ImagingFile (e.g., t0, t1, etc.)
+        imaging_file_num = fov.ImagingFile[0] if isinstance(fov.ImagingFile, list) else fov.ImagingFile
+        output_subdir = fov_output_dir / f"t{imaging_file_num}"
+        output_subdir.mkdir(parents=True, exist_ok=True)
+
+        # Save extraction results to subdirectory
         print("  Saving extraction to HDF5...")
-        h5_file = fov_output_dir / 'extraction_results.h5'
+        h5_file = output_subdir / 'extraction_results.h5'
         save_extraction_hdf5(ce, str(h5_file))
 
         # Calculate statistics
@@ -154,19 +159,16 @@ def process_single_fov(data_dir: Path,
                     except Exception as e:
                         print(f"    Warning: Could not analyze cell {i}: {e}")
 
-        # Save tuning metrics
+        # Save tuning metrics to subdirectory
         import pandas as pd
         if tuning_metrics:
             df = pd.DataFrame(tuning_metrics)
-            df.to_csv(fov_output_dir / 'tuning_metrics.csv', index=False)
+            df.to_csv(output_subdir / 'tuning_metrics.csv', index=False)
 
-        # Generate plots
+        # Generate plots in same subdirectory
         if save_plots:
             print("  Generating analysis plots...")
-            # Save in subfolder named after ImagingFile (e.g., t0, t1, etc.)
-            imaging_file_num = fov.ImagingFile[0] if isinstance(fov.ImagingFile, list) else fov.ImagingFile
-            plots_dir = fov_output_dir / 'plots' / f"t{imaging_file_num}"
-            create_full_analysis_report(ce, output_dir=str(plots_dir), fit_r_threshold=fit_r_threshold)
+            create_full_analysis_report(ce, output_dir=str(output_subdir), fit_r_threshold=fit_r_threshold)
 
         # Calculate summary statistics
         stats = {
