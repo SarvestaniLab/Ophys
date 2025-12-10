@@ -463,7 +463,6 @@ fov1 = FOV(
     TifStack_path=r'X:\Experimental_Data\BrainImaging\20251113_Derrick',
     ImagingFile=[0],
     Spk2File=[16],
-    factor=4,
     fileImagingind=1,
     brain_region='v1',
     zoom=3,

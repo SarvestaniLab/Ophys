@@ -477,7 +477,7 @@ def extract_suite2p_traces(fov, fnum: int = 0, save_dir: Optional[Path] = None) 
             # Create mask
             mask = np.zeros((512, 512))
             valid_idx = (xpix < 512) & (ypix < 512) & (xpix >= 0) & (ypix >= 0)
-            mask[xpix[valid_idx], ypix[valid_idx]] = lam[valid_idx]
+            mask[ypix[valid_idx], xpix[valid_idx]] = lam[valid_idx]
 
             mask_coords = np.argwhere(mask > 0)
             cell.mask = mask_coords
