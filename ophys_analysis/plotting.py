@@ -1,0 +1,657 @@
+"""
+Visualization functions for 2-photon imaging analysis.
+
+This module provides plotting functions for:
+- Individual cell tuning curves
+- Orientation and direction preference maps
+- Population statistics
+- Trial-averaged traces
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import Optional, Tuple, List
+import warnings
+
+from .cell_data import Cell, CellExtraction
+from .tuning_analysis import get_tuning_madineh, double_gauss
+
+
+def get_stim_info(ce: CellExtraction, n_dirs: int) -> np.ndarray:
+    """
+    Get stimulus info (orientations/directions) from FOV or generate default.
+
+    Args:
+        ce: CellExtraction object with optional fov reference
+        n_dirs: Number of directions (excluding blank)
+
+    Returns:
+        Array of stimulus values in degrees
+    """
+    # Try to get actual stim values from FOV
+    if ce.fov is not None and hasattr(ce.fov, 'stim_values') and ce.fov.stim_values is not None:
+        stim_values = np.array(ce.fov.stim_values)
+        # Return only the number of directions needed (in case blank is included)
+        if len(stim_values) >= n_dirs:
+            return stim_values[:n_dirs]
+        else:
+            return stim_values
+
+    # Fallback: generate evenly spaced values
+    return np.arange(0, 360, 360/n_dirs)
+
+
+def plot_cell_tuning_curve(cell: Cell,
+                             stimInfo: np.ndarray,
+                             tuning: dict,
+                             fitdata: np.ndarray,
+                             cell_index: int,
+                             stim_dur: float,
+                             save_path: Optional[str] = None):
+    """
+    Plot comprehensive tuning analysis for a single cell.
+
+    Creates a figure with:
+    - Time series traces for each orientation
+    - Polar tuning curve
+    - Fitted tuning curve
+    - ROI mask overlay
+
+    Args:
+        cell: Cell object
+        stimInfo: Stimulus orientations/directions (degrees)
+        tuning: Tuning metrics from get_tuning_madineh
+        fitdata: Fitted tuning curve values
+        cell_index: Cell number for title
+        stim_dur: Stimulus duration (seconds)
+        save_path: Optional path to save figure
+    """
+    n_dirs = len(stimInfo)
+    row_width = int(np.ceil(n_dirs / 2))
+
+    fig = plt.figure(figsize=(14, 10))
+
+    # Get response data
+    response = cell.condition_response[:n_dirs]
+    response_sem = cell.condition_response_std[:n_dirs]
+
+    # Sort by angle
+    sort_idx = np.argsort(stimInfo)
+    stimInfo_sorted = stimInfo[sort_idx]
+    response_sorted = response[sort_idx]
+    response_sem_sorted = response_sem[sort_idx]
+
+    # Ensure non-negative for plotting
+    if np.min(response_sorted) < 0:
+        response_sorted = response_sorted - np.min(response_sorted)
+
+    n_points = cell.cyc.shape[2]
+    # Use arange for correct time spacing (linspace would give n_points/(n_points-1) * scanPeriod spacing)
+    time_trace = np.arange(n_points) * cell.scanPeriod
+
+    # Calculate global y-limits across ALL orientations for consistent axis
+    global_ymax = -np.inf
+    global_ymin = np.inf
+    for si in range(len(stimInfo)):
+        data = cell.cyc[si, :, :]
+        if np.any(~np.isnan(data)):
+            global_ymax = max(global_ymax, np.nanmax(data))
+            global_ymin = min(global_ymin, np.nanmin(data))
+    global_ymax = max(global_ymax * 1.2, 0.5)
+    global_ymin = min(global_ymin * 1.2, -0.2)
+
+    # Plot time series for each orientation
+    for i, sort_i in enumerate(sort_idx):
+        ax = plt.subplot(3, row_width, i + 1)
+
+        # Highlight stimulus period
+        ax.axvspan(0, stim_dur, alpha=0.3, color='yellow')
+
+        # Plot individual trials
+        for trial in range(cell.cyc.shape[1]):
+            ax.plot(time_trace, cell.cyc[sort_i, trial, :],
+                   alpha=0.3, linewidth=0.5, color='gray')
+
+        # Plot mean trace
+        mean_trace = np.nanmean(cell.cyc[sort_i, :, :], axis=0)
+        ax.plot(time_trace, mean_trace, 'k', linewidth=2)
+
+        # Use consistent y-limits across all orientations
+        ax.set_ylim([global_ymin, global_ymax])
+        ax.set_xlim([0, np.max(time_trace)])
+
+        if i == 0:
+            ax.set_title(f'ROI {cell_index}', fontweight='bold')
+        else:
+            ax.set_title(f'{stimInfo_sorted[i]:.0f}°')
+
+        if i == 0 or i == row_width:
+            ax.set_ylabel('ΔF/F')
+        else:
+            ax.set_yticks([])
+
+        if i >= row_width:
+            ax.set_xlabel('Time (s)')
+        else:
+            ax.set_xticks([])
+
+    # Plot polar tuning curve
+    ax_polar = plt.subplot(3, 3, 7, projection='polar')
+    theta_rad = np.deg2rad(np.append(stimInfo_sorted, stimInfo_sorted[0]))
+    r_values = np.append(response_sorted, response_sorted[0])
+    ax_polar.plot(theta_rad, r_values, 'o-', linewidth=2)
+    ax_polar.set_theta_zero_location('E')
+    ax_polar.set_theta_direction(1)
+
+    # Plot Cartesian tuning curve with fit
+    ax_tuning = plt.subplot(3, 3, 8)
+    ax_tuning.errorbar(stimInfo_sorted, response_sorted, yerr=response_sem_sorted,
+                       fmt='o', capsize=3, label='Data')
+    # fitdata has 360 points (1-degree resolution, 0-359°)
+    fit_x = np.arange(0, 360, 1)
+    ax_tuning.plot(fit_x, fitdata, 'r--', linewidth=2, label='Fit')
+    ax_tuning.set_xlabel('Direction (°)')
+    ax_tuning.set_ylabel('ΔF/F')
+    ax_tuning.set_xlim([0, 360])
+    ax_tuning.set_xticks(tuning['xlabel_vals'])
+    ax_tuning.legend()
+    ax_tuning.set_title(f"Visual Resp: {cell.ROI_responsiveness}")
+
+    # Add statistics text (using fit-based OTI/DTI with standard formula)
+    stats_text = (
+        f"Pref Ort: {tuning['pref_ort_fit']:.0f}°, OTI: {tuning['oti_fit']:.2f}\n"
+        f"Pref Dir: {tuning['pref_dir_fit']:.0f}°, DTI: {tuning['dti_fit']:.2f}\n"
+        f"Fit r: {tuning['fit_r']:.2f}, BW: {tuning['fit_bandwidth']:.0f}°"
+    )
+    ax_tuning.text(0.02, 0.98, stats_text, transform=ax_tuning.transAxes,
+                   verticalalignment='top', fontsize=9,
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    # Plot ROI mask in bottom right, colored by preferred orientation
+    ax_mask = plt.subplot(3, 3, 9)
+    pref_ort = tuning.get('pref_ort_fit', 0)
+    ort_color = plt.cm.hsv(pref_ort / 180.0)
+
+    # Use 2D mask if available for detailed Suite2P-like display
+    if hasattr(cell, 'mask_2d') and cell.mask_2d is not None:
+        mask_2d = cell.mask_2d
+
+        # Find bounding box of the mask
+        nonzero = np.argwhere(mask_2d > 0)
+        if len(nonzero) > 0:
+            y_min_mask, x_min_mask = nonzero.min(axis=0)
+            y_max_mask, x_max_mask = nonzero.max(axis=0)
+
+            # Add margin around the ROI
+            margin = 10
+            y_min_crop = max(0, y_min_mask - margin)
+            y_max_crop = min(mask_2d.shape[0], y_max_mask + margin)
+            x_min_crop = max(0, x_min_mask - margin)
+            x_max_crop = min(mask_2d.shape[1], x_max_mask + margin)
+
+            # Crop the mask
+            mask_crop = mask_2d[y_min_crop:y_max_crop, x_min_crop:x_max_crop]
+
+            # Create RGBA image colored by orientation
+            rgba = np.zeros((*mask_crop.shape, 4))
+            mask_norm = mask_crop / mask_crop.max() if mask_crop.max() > 0 else mask_crop
+            rgba[..., 0] = ort_color[0] * (mask_norm > 0)
+            rgba[..., 1] = ort_color[1] * (mask_norm > 0)
+            rgba[..., 2] = ort_color[2] * (mask_norm > 0)
+            rgba[..., 3] = mask_norm  # Alpha = weight
+
+            ax_mask.imshow(rgba, origin='upper',
+                          extent=[x_min_crop, x_max_crop, y_max_crop, y_min_crop])
+
+            # Mark centroid
+            centroid_x = cell.xPos if cell.xPos else (x_min_mask + x_max_mask) / 2
+            centroid_y = cell.yPos if cell.yPos else (y_min_mask + y_max_mask) / 2
+            ax_mask.plot(centroid_x, centroid_y, 'k+', markersize=10, markeredgewidth=2)
+
+            x_min, x_max = 0,512
+            y_min, y_max = 0,512
+        
+            ax_mask.set_xlim(x_min, x_max)
+            ax_mask.set_ylim(y_max, y_min)
+
+    elif cell.mask is not None and len(cell.mask) > 3:
+        # Fallback to coordinate-based plotting
+        mask_xy = cell.mask[:, ::-1] if cell.mask.shape[1] == 2 else cell.mask
+        ax_mask.scatter(mask_xy[:, 0], mask_xy[:, 1], c=[ort_color], s=4, marker='s', alpha=0.8)
+
+        margin = 10
+        x_min, x_max = mask_xy[:, 0].min() - margin, mask_xy[:, 0].max() + margin
+        y_min, y_max = mask_xy[:, 1].min() - margin, mask_xy[:, 1].max() + margin
+        x_min, x_max = 0,512
+        y_min, y_max = 0,512
+    
+        ax_mask.set_xlim(x_min, x_max)
+        ax_mask.set_ylim(y_max, y_min)
+
+        centroid_x = np.mean(mask_xy[:, 0])
+        centroid_y = np.mean(mask_xy[:, 1])
+        ax_mask.plot(centroid_x, centroid_y, 'k+', markersize=10, markeredgewidth=2)
+
+    ax_mask.set_aspect('equal')
+    ax_mask.set_title(f'ROI (Pref: {tuning.get("pref_ort_fit", 0):.0f}°)')
+    ax_mask.set_xlabel('X (px)')
+    ax_mask.set_ylabel('Y (px)')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+
+def plot_orientation_map(ce: CellExtraction,
+                          cell_indices: Optional[List[int]] = None,
+                          fov_image: Optional[np.ndarray] = None,
+                          save_path: Optional[str] = None):
+    """
+    Plot orientation preference map.
+
+    Args:
+        ce: CellExtraction object
+        cell_indices: Indices of cells to plot (default: all responsive)
+        fov_image: Optional FOV image for background
+        save_path: Optional path to save figure
+    """
+    if cell_indices is None:
+        cell_indices = [i for i, c in enumerate(ce.cells) if c.ROI_responsiveness]
+
+    # Get tuning for all cells
+    tuning_data = []
+    for idx in cell_indices:
+        cell = ce.cells[idx]
+        n_dirs = len(cell.uniqStims) - 1
+        if n_dirs > 0:
+            stimInfo = get_stim_info(ce, n_dirs)
+            try:
+                tuning, _, _ = get_tuning_madineh(cell.condition_response[:n_dirs], stimInfo)
+                tuning_data.append((idx, tuning))
+            except:
+                pass
+
+    # Create color map (HSV for orientation)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+
+    # Orientation map (0-180°)
+    if fov_image is not None:
+        ax1.imshow(fov_image, cmap='gray', alpha=0.5)
+        ax2.imshow(fov_image, cmap='gray', alpha=0.5)
+
+    # Track bounds for axis limits
+    all_x = []
+    all_y = []
+
+    for idx, tuning in tuning_data:
+        cell = ce.cells[idx]
+        pref_ort = tuning['pref_ort_fit']
+        pref_dir = tuning['pref_dir_fit']
+
+        # Color by orientation (0-180)
+        ort_color = plt.cm.hsv(pref_ort / 180.0)
+        # Color by direction (0-360)
+        dir_color = plt.cm.hsv(pref_dir / 360.0)
+
+        # Use 2D mask if available for detailed Suite2P-like display
+        if hasattr(cell, 'mask_2d') and cell.mask_2d is not None:
+            mask_2d = cell.mask_2d
+            nonzero = np.argwhere(mask_2d > 0)
+            if len(nonzero) > 0:
+                # Track bounds
+                all_y.extend(nonzero[:, 0])
+                all_x.extend(nonzero[:, 1])
+
+                # Create colored overlay for this cell's mask
+                # For orientation map
+                ort_rgba = np.zeros((*mask_2d.shape, 4))
+                mask_binary = mask_2d > 0
+                ort_rgba[mask_binary, 0] = ort_color[0]
+                ort_rgba[mask_binary, 1] = ort_color[1]
+                ort_rgba[mask_binary, 2] = ort_color[2]
+                ort_rgba[mask_binary, 3] = 0.6
+                ax1.imshow(ort_rgba, origin='upper', extent=[0, mask_2d.shape[1], mask_2d.shape[0], 0])
+
+                # For direction map
+                dir_rgba = np.zeros((*mask_2d.shape, 4))
+                dir_rgba[mask_binary, 0] = dir_color[0]
+                dir_rgba[mask_binary, 1] = dir_color[1]
+                dir_rgba[mask_binary, 2] = dir_color[2]
+                dir_rgba[mask_binary, 3] = 0.6
+                ax2.imshow(dir_rgba, origin='upper', extent=[0, mask_2d.shape[1], mask_2d.shape[0], 0])
+
+        elif cell.mask is not None and len(cell.mask) > 3:
+            # Fallback to coordinate-based plotting
+            mask_xy = cell.mask[:, ::-1] if cell.mask.shape[1] == 2 else cell.mask
+
+            # Track bounds
+            all_x.extend(mask_xy[:, 0])
+            all_y.extend(mask_xy[:, 1])
+
+            # Plot as scatter (more detailed than convex hull)
+            ax1.scatter(mask_xy[:, 0], mask_xy[:, 1], c=[ort_color], s=2, marker='s', alpha=0.6)
+            ax2.scatter(mask_xy[:, 0], mask_xy[:, 1], c=[dir_color], s=2, marker='s', alpha=0.6)
+
+    # Set axis limits based on data if no fov_image provided
+
+    ax1.set_xlim(0, 512)
+    ax1.set_ylim(512, 0)
+    ax2.set_xlim(0, 512)
+    ax2.set_ylim(512, 0)
+
+    ax1.set_title('Orientation Preference Map', fontsize=14, fontweight='bold')
+    ax1.set_xlabel('X (pixels)')
+    ax1.set_ylabel('Y (pixels)')
+    ax1.set_aspect('equal')
+
+    ax2.set_title('Direction Preference Map', fontsize=14, fontweight='bold')
+    ax2.set_xlabel('X (pixels)')
+    ax2.set_ylabel('Y (pixels)')
+    ax2.set_aspect('equal')
+
+    # Add color bars
+    sm1 = plt.cm.ScalarMappable(cmap=plt.cm.hsv, norm=plt.Normalize(vmin=0, vmax=180))
+    sm1.set_array([])
+    cbar1 = plt.colorbar(sm1, ax=ax1, label='Preferred Orientation (°)')
+    cbar1.set_ticks([0, 45, 90, 135, 180])
+
+    sm2 = plt.cm.ScalarMappable(cmap=plt.cm.hsv, norm=plt.Normalize(vmin=0, vmax=360))
+    sm2.set_array([])
+    cbar2 = plt.colorbar(sm2, ax=ax2, label='Preferred Direction (°)')
+    cbar2.set_ticks([0, 90, 180, 270, 360])
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+
+def plot_tuning_distributions(ce: CellExtraction,
+                                cell_indices: Optional[List[int]] = None,
+                                save_path: Optional[str] = None):
+    """
+    Plot distributions of tuning metrics.
+
+    Args:
+        ce: CellExtraction object
+        cell_indices: Indices of cells to analyze (default: all responsive)
+        save_path: Optional path to save figure
+    """
+    if cell_indices is None:
+        cell_indices = [i for i, c in enumerate(ce.cells) if c.ROI_responsiveness]
+
+    # Collect tuning metrics
+    oti_values = []
+    dti_values = []
+    pref_ort = []
+    pref_dir = []
+    bandwidths = []
+
+    for idx in cell_indices:
+        cell = ce.cells[idx]
+        n_dirs = len(cell.uniqStims) - 1
+        if n_dirs > 0:
+            stimInfo = get_stim_info(ce, n_dirs)
+            try:
+                tuning, _, _ = get_tuning_madineh(cell.condition_response[:n_dirs], stimInfo)
+                oti_values.append(tuning['oti_fit'])
+                dti_values.append(tuning['dti_fit'])
+                pref_ort.append(tuning['pref_ort_fit'])
+                pref_dir.append(tuning['pref_dir_fit'])
+                bandwidths.append(tuning['fit_bandwidth'])
+            except:
+                pass
+
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+
+    # OTI distribution
+    axes[0, 0].hist(oti_values, bins=np.linspace(0, 1, 11), edgecolor='black')
+    axes[0, 0].set_xlabel('OTI')
+    axes[0, 0].set_ylabel('Count')
+    axes[0, 0].set_title(f'Orientation Tuning Index\nMean: {np.mean(oti_values):.2f} ± {np.std(oti_values):.2f}')
+
+    # DTI distribution
+    axes[0, 1].hist(dti_values, bins=np.linspace(0, 1, 11), edgecolor='black')
+    axes[0, 1].set_xlabel('DTI')
+    axes[0, 1].set_ylabel('Count')
+    axes[0, 1].set_title(f'Direction Tuning Index\nMean: {np.mean(dti_values):.2f} ± {np.std(dti_values):.2f}')
+
+    # Bandwidth distribution
+    axes[0, 2].hist(bandwidths, bins=20, edgecolor='black')
+    axes[0, 2].set_xlabel('Tuning Width (°)')
+    axes[0, 2].set_ylabel('Count')
+    axes[0, 2].set_title(f'Tuning Bandwidth\nMean: {np.mean(bandwidths):.1f}°')
+
+    # Preferred orientation distribution
+    axes[1, 0].hist(pref_ort, bins=np.linspace(0, 180, 19), edgecolor='black')
+    axes[1, 0].set_xlabel('Preferred Orientation (°)')
+    axes[1, 0].set_ylabel('Count')
+    axes[1, 0].set_title('Preferred Orientation Distribution')
+    axes[1, 0].set_xticks([0, 45, 90, 135, 180])
+
+    # Preferred direction distribution
+    axes[1, 1].hist(pref_dir, bins=np.linspace(0, 360, 37), edgecolor='black')
+    axes[1, 1].set_xlabel('Preferred Direction (°)')
+    axes[1, 1].set_ylabel('Count')
+    axes[1, 1].set_title('Preferred Direction Distribution')
+    axes[1, 1].set_xticks([0, 90, 180, 270, 360])
+
+    # DTI vs OTI
+    axes[1, 2].scatter(dti_values, oti_values, alpha=0.5)
+    axes[1, 2].plot([0, 1], [0, 1], 'r--', label='Unity')
+    axes[1, 2].set_xlabel('DTI')
+    axes[1, 2].set_ylabel('OTI')
+    axes[1, 2].set_title('Direction vs Orientation Selectivity')
+    axes[1, 2].legend()
+    axes[1, 2].set_xlim([0, 1])
+    axes[1, 2].set_ylim([0, 1])
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+
+def plot_population_summary(ce: CellExtraction, save_path: Optional[str] = None):
+    """
+    Plot summary statistics for the entire population.
+
+    Args:
+        ce: CellExtraction object
+        save_path: Optional path to save figure
+    """
+    n_cells = len(ce.cells)
+    n_responsive = sum(c.ROI_responsiveness for c in ce.cells)
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    # Cell responsiveness
+    axes[0, 0].bar(['Responsive', 'Non-responsive'],
+                   [n_responsive, n_cells - n_responsive],
+                   color=['green', 'gray'])
+    axes[0, 0].set_ylabel('Number of cells')
+    axes[0, 0].set_title(f'Cell Responsiveness\n{n_responsive}/{n_cells} ({100*n_responsive/n_cells:.1f}%)')
+
+    # Spatial distribution
+    x_pos = ce.to_array('xPos')
+    y_pos = ce.to_array('yPos')
+    responsive_mask = ce.to_array('ROI_responsiveness').astype(bool)
+
+    axes[0, 1].scatter(x_pos[~responsive_mask], y_pos[~responsive_mask],
+                       c='gray', s=10, alpha=0.3, label='Non-responsive')
+    axes[0, 1].scatter(x_pos[responsive_mask], y_pos[responsive_mask],
+                       c='green', s=10, alpha=0.6, label='Responsive')
+    axes[0, 1].set_xlabel('X position (pixels)')
+    axes[0, 1].set_ylabel('Y position (pixels)')
+    axes[0, 1].set_title('Spatial Distribution')
+    axes[0, 1].legend()
+    axes[0, 1].set_aspect('equal')
+
+    # Response amplitude distribution
+    max_responses = []
+    for cell in ce.cells:
+        if cell.condition_response is not None:
+            max_responses.append(np.max(cell.condition_response))
+
+    axes[1, 0].hist(max_responses, bins=30, edgecolor='black')
+    axes[1, 0].set_xlabel('Max ΔF/F')
+    axes[1, 0].set_ylabel('Count')
+    axes[1, 0].set_title(f'Response Amplitude Distribution\nMean: {np.mean(max_responses):.2f}')
+
+    # Summary text
+    summary_text = (
+        f"Dataset Summary\n"
+        f"{'='*40}\n"
+        f"Total cells: {n_cells}\n"
+        f"Responsive: {n_responsive} ({100*n_responsive/n_cells:.1f}%)\n"
+        f"Non-responsive: {n_cells - n_responsive}\n"
+        f"\n"
+        f"Animal: {ce.fov.animal_name if ce.fov else 'N/A'}\n"
+        f"Brain region: {ce.fov.brain_region if ce.fov else 'N/A'}\n"
+        f"Stim type: {ce.fov.stim_type if ce.fov else 'N/A'}\n"
+        f"Recording date: {ce.fov.recording_date if ce.fov else 'N/A'}\n"
+    )
+    axes[1, 1].text(0.1, 0.5, summary_text, transform=axes[1, 1].transAxes,
+                    verticalalignment='center', fontsize=12,
+                    fontfamily='monospace',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    axes[1, 1].axis('off')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+
+def get_well_fit_cells(ce: CellExtraction,
+                        fit_r_threshold: float = 0.9,
+                        responsive_only: bool = True) -> List[int]:
+    """
+    Get indices of cells with good Gaussian fit quality.
+
+    Args:
+        ce: CellExtraction object
+        fit_r_threshold: Minimum fit correlation (default: 0.9)
+        responsive_only: Only consider responsive cells (default: True)
+
+    Returns:
+        List of cell indices with fit_r >= fit_r_threshold
+    """
+    well_fit_indices = []
+
+    for i, cell in enumerate(ce.cells):
+        if responsive_only and not cell.ROI_responsiveness:
+            continue
+
+        n_dirs = len(cell.uniqStims) - 1
+        if n_dirs > 0:
+            stimInfo = get_stim_info(ce, n_dirs)
+            try:
+                tuning, _, _ = get_tuning_madineh(cell.condition_response[:n_dirs], stimInfo)
+                if tuning['fit_r'] >= fit_r_threshold:
+                    well_fit_indices.append(i)
+            except:
+                pass
+
+    return well_fit_indices
+
+
+def create_full_analysis_report(ce: CellExtraction,
+                                  fov_image: Optional[np.ndarray] = None,
+                                  output_dir: Optional[str] = None,
+                                  cell_indices: Optional[List[int]] = None,
+                                  fit_r_threshold: Optional[float] = None,
+                                  max_individual_plots: int = 10):
+    """
+    Create a complete analysis report with all plots.
+
+    Args:
+        ce: CellExtraction object
+        fov_image: Optional FOV image
+        output_dir: Directory to save plots (if None, displays instead)
+        cell_indices: Specific cell indices to include (default: all responsive cells)
+        fit_r_threshold: If specified, only include cells with Gaussian fit r >= this value
+                         (e.g., 0.9 for well-fit cells). Applied after cell_indices filtering.
+        max_individual_plots: Maximum number of individual cell tuning curves to generate
+                              (default: 10, set to None or -1 for all cells)
+    """
+    from pathlib import Path
+
+    if output_dir:
+        output_path = Path(output_dir)
+        output_path.mkdir(exist_ok=True, parents=True)
+
+    # Determine which cells to include
+    if cell_indices is None:
+        cell_indices = [i for i, c in enumerate(ce.cells) if c.ROI_responsiveness]
+
+    # Filter by fit quality if threshold specified
+    if fit_r_threshold is not None:
+        filtered_indices = []
+        for idx in cell_indices:
+            cell = ce.cells[idx]
+            n_dirs = len(cell.uniqStims) - 1
+            if n_dirs > 0:
+                stimInfo = get_stim_info(ce, n_dirs)
+                try:
+                    tuning, _, _ = get_tuning_madineh(cell.condition_response[:n_dirs], stimInfo)
+                    if tuning['fit_r'] >= fit_r_threshold:
+                        filtered_indices.append(idx)
+                except:
+                    pass
+        print(f"Filtered to {len(filtered_indices)}/{len(cell_indices)} cells with fit_r >= {fit_r_threshold}")
+        cell_indices = filtered_indices
+
+    # 1. Population summary (always shows all cells)
+    print("Creating population summary...")
+    plot_population_summary(ce,
+                             save_path=str(output_path / 'population_summary.png') if output_dir else None)
+
+    # 2. Orientation maps (use specified cell indices)
+    print("Creating orientation/direction maps...")
+    plot_orientation_map(ce, cell_indices=cell_indices, fov_image=fov_image,
+                          save_path=str(output_path / 'orientation_maps.png') if output_dir else None)
+
+    # 3. Tuning distributions (use specified cell indices)
+    print("Creating tuning distributions...")
+    plot_tuning_distributions(ce, cell_indices=cell_indices,
+                               save_path=str(output_path / 'tuning_distributions.png') if output_dir else None)
+
+    # 4. Individual cell tuning curves
+    # Determine how many individual plots to create
+    if max_individual_plots is None or max_individual_plots < 0:
+        plot_indices = cell_indices
+    else:
+        plot_indices = cell_indices[:max_individual_plots]
+
+    print(f"Creating tuning curves for {len(plot_indices)} cells...")
+
+    for idx in plot_indices:
+        cell = ce.cells[idx]
+        n_dirs = len(cell.uniqStims) - 1
+        if n_dirs > 0:
+            stimInfo = get_stim_info(ce, n_dirs)
+            try:
+                tuning, _, fitdata = get_tuning_madineh(cell.condition_response[:n_dirs], stimInfo)
+                stim_dur = ce.fov.stim_dur if ce.fov else 4.0
+                plot_cell_tuning_curve(
+                    cell, stimInfo, tuning, fitdata, idx, stim_dur,
+                    save_path=str(output_path / f'cell_{idx}_tuning.png') if output_dir else None
+                )
+            except Exception as e:
+                print(f"  Warning: Could not plot cell {idx}: {e}")
+
+    print("✓ Analysis report complete!")
