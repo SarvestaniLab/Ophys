@@ -208,6 +208,12 @@ def plot_cell_tuning_curve(cell: Cell,
             centroid_y = cell.yPos if cell.yPos else (y_min_mask + y_max_mask) / 2
             ax_mask.plot(centroid_x, centroid_y, 'k+', markersize=10, markeredgewidth=2)
 
+            x_min, x_max = 0,512
+            y_min, y_max = 0,512
+        
+            ax_mask.set_xlim(x_min, x_max)
+            ax_mask.set_ylim(y_max, y_min)
+
     elif cell.mask is not None and len(cell.mask) > 3:
         # Fallback to coordinate-based plotting
         mask_xy = cell.mask[:, ::-1] if cell.mask.shape[1] == 2 else cell.mask
@@ -216,6 +222,9 @@ def plot_cell_tuning_curve(cell: Cell,
         margin = 10
         x_min, x_max = mask_xy[:, 0].min() - margin, mask_xy[:, 0].max() + margin
         y_min, y_max = mask_xy[:, 1].min() - margin, mask_xy[:, 1].max() + margin
+        x_min, x_max = 0,512
+        y_min, y_max = 0,512
+    
         ax_mask.set_xlim(x_min, x_max)
         ax_mask.set_ylim(y_max, y_min)
 
@@ -328,20 +337,11 @@ def plot_orientation_map(ce: CellExtraction,
             ax2.scatter(mask_xy[:, 0], mask_xy[:, 1], c=[dir_color], s=2, marker='s', alpha=0.6)
 
     # Set axis limits based on data if no fov_image provided
-    if fov_image is None and len(all_x) > 0:
-        margin = 20  # pixels
-        x_min, x_max = min(all_x) - margin, max(all_x) + margin
-        y_min, y_max = min(all_y) - margin, max(all_y) + margin
-        ax1.set_xlim(x_min, x_max)
-        ax1.set_ylim(y_max, y_min)  # Invert y-axis for image coordinates
-        ax2.set_xlim(x_min, x_max)
-        ax2.set_ylim(y_max, y_min)
-    elif fov_image is None:
-        # Default to typical FOV size if no data
-        ax1.set_xlim(0, 512)
-        ax1.set_ylim(512, 0)
-        ax2.set_xlim(0, 512)
-        ax2.set_ylim(512, 0)
+
+    ax1.set_xlim(0, 512)
+    ax1.set_ylim(512, 0)
+    ax2.set_xlim(0, 512)
+    ax2.set_ylim(512, 0)
 
     ax1.set_title('Orientation Preference Map', fontsize=14, fontweight='bold')
     ax1.set_xlabel('X (pixels)')
